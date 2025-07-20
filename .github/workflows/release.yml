@@ -1,0 +1,132 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # 当推送标签时触发，例如 v1.0.0
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.24.0'
+        channel: 'stable'
+
+    - name: Get dependencies
+      run: flutter pub get
+
+    - name: Build Windows executable
+      run: |
+        flutter config --enable-windows-desktop
+        flutter build windows --release
+
+    - name: Build Android APK (split per ABI)
+      run: flutter build apk --release --split-per-abi
+
+    - name: Create release directory
+      run: mkdir release-files
+
+    - name: Copy Windows executable
+      run: |
+        Copy-Item -Path "build\windows\x64\runner\Release\*" -Destination "release-files\" -Recurse
+        Compress-Archive -Path "release-files\*" -DestinationPath "release-files\habit_tracker_windows.zip"
+
+    - name: Copy Android APKs
+      run: |
+        Copy-Item -Path "build\app\outputs\flutter-apk\*.apk" -Destination "release-files\"
+
+    - name: Get version from pubspec.yaml
+      id: get_version
+      run: |
+        $version = (Get-Content pubspec.yaml | Select-String "version:" | ForEach-Object { $_.ToString().Split(":")[1].Trim().Split("+")[0] })
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Habit Tracker v${{ steps.get_version.outputs.version }}
+        body: |
+          ## 🎉 Habit Tracker v${{ steps.get_version.outputs.version }}
+          
+          ### 📱 Android
+          - `app-arm64-v8a-release.apk` - ARM64 设备 (推荐)
+          - `app-armeabi-v7a-release.apk` - ARM32 设备
+          - `app-x86_64-release.apk` - x86_64 设备
+          
+          ### 💻 Windows
+          - `habit_tracker_windows.zip` - Windows 可执行文件
+          
+          ### 📋 更新内容
+          请查看提交历史了解具体更改。
+          
+          ### 🔧 安装说明
+          
+          **Android:**
+          1. 下载适合您设备架构的APK文件
+          2. 在手机上启用"未知来源"安装
+          3. 安装APK文件
+          
+          **Windows:**
+          1. 下载 `habit_tracker_windows.zip`
+          2. 解压到任意文件夹
+          3. 运行 `habit_tracker.exe`
+        draft: false
+        prerelease: false
+
+    - name: Upload Windows Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: release-files/habit_tracker_windows.zip
+        asset_name: habit_tracker_windows.zip
+        asset_content_type: application/zip
+
+    - name: Upload ARM64 APK
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: release-files/app-arm64-v8a-release.apk
+        asset_name: app-arm64-v8a-release.apk
+        asset_content_type: application/vnd.android.package-archive
+
+    - name: Upload ARMv7 APK
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: release-files/app-armeabi-v7a-release.apk
+        asset_name: app-armeabi-v7a-release.apk
+        asset_content_type: application/vnd.android.package-archive
+
+    - name: Upload x86_64 APK
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: release-files/app-x86_64-release.apk
+        asset_name: app-x86_64-release.apk
+        asset_content_type: application/vnd.android.package-archive
